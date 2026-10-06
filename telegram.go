@@ -31,7 +31,26 @@ type telegramMessage struct {
 	Chat struct {
 		ID int64 `json:"id"`
 	} `json:"chat"`
-	Text string `json:"text"`
+	Text     string                `json:"text"`
+	Audio    *telegramFile         `json:"audio"`
+	Voice    *telegramFile         `json:"voice"`
+	Document *telegramDocumentFile `json:"document"`
+}
+
+type telegramFile struct {
+	FileID   string `json:"file_id"`
+	FileSize int64  `json:"file_size"`
+	MimeType string `json:"mime_type"`
+}
+
+type telegramDocumentFile struct {
+	telegramFile
+	FileName string `json:"file_name"`
+}
+
+type telegramFileInfo struct {
+	FilePath string `json:"file_path"`
+	FileSize int64  `json:"file_size"`
 }
 
 type telegramResponse struct {
@@ -94,10 +113,17 @@ func (b *telegramBot) handleUpdate(ctx context.Context, update telegramUpdate) {
 	if update.Message == nil || update.Message.Chat.ID != b.config.telegramChatID {
 		return
 	}
+	log.Println("recieved message", update)
 	text := strings.TrimSpace(update.Message.Text)
 	switch text {
 	case "/start", "/help":
-		b.reply(ctx, "Send a YouTube URL to play its audio in the configured Discord voice channel.")
+		b.reply(ctx, "Send a YouTube URL or an audio file to play it in the configured Discord voice channel.")
+		return
+	}
+	if file, ok := update.Message.audioFile(); ok {
+		b.startPlayback(ctx, "Downloading and preparing audio file...", func() (string, func(), error) {
+			return b.downloadTelegramAudio(ctx, file)
+		})
 		return
 	}
 	rawURL := text
@@ -105,24 +131,43 @@ func (b *telegramBot) handleUpdate(ctx context.Context, update telegramUpdate) {
 		rawURL = strings.TrimSpace(strings.TrimPrefix(text, "/play "))
 	}
 	if !isYouTubeURL(rawURL) {
-		b.reply(ctx, "Send a YouTube URL, or use /play followed by a YouTube URL.")
+		b.reply(ctx, "Send a YouTube URL or an audio file, or use /play followed by a YouTube URL.")
 		return
 	}
+	b.startPlayback(ctx, "Downloading and preparing audio...", func() (string, func(), error) {
+		return downloadAudio(ctx, rawURL, b.config)
+	})
+}
+
+func (m *telegramMessage) audioFile() (telegramFile, bool) {
+	if m.Audio != nil {
+		return *m.Audio, true
+	}
+	if m.Voice != nil {
+		return *m.Voice, true
+	}
+	if m.Document != nil && isAudioDocument(m.Document.FileName, m.Document.MimeType) {
+		return m.Document.telegramFile, true
+	}
+	return telegramFile{}, false
+}
+
+func (b *telegramBot) startPlayback(ctx context.Context, status string, download func() (string, func(), error)) {
 	if !b.playLock.TryLock() {
 		b.reply(ctx, "Audio is already downloading or playing. Please wait for it to finish.")
 		return
 	}
-	if err := b.sendMessage(ctx, "Downloading and preparing audio..."); err != nil {
+	if err := b.sendMessage(ctx, status); err != nil {
 		b.playLock.Unlock()
 		log.Printf("Telegram status message failed: %v", err)
 		return
 	}
-	go b.play(ctx, rawURL)
+	go b.play(ctx, download)
 }
 
-func (b *telegramBot) play(ctx context.Context, rawURL string) {
+func (b *telegramBot) play(ctx context.Context, download func() (string, func(), error)) {
 	defer b.playLock.Unlock()
-	path, cleanup, err := downloadAudio(ctx, rawURL, b.config)
+	path, cleanup, err := download()
 	if err != nil {
 		b.reportError(ctx, err)
 		return
