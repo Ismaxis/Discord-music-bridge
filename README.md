@@ -24,12 +24,13 @@ for encryption setup to finish before accepting playback. Configure the
 Discord bot with the `bot` OAuth scope and `Connect`/`Speak` permissions for
 the voice channel.
 
-Send an audio attachment, voice message, or audio document in the authorized
-Telegram chat to play it. Documents are accepted when their MIME type is
-`audio/*` or their filename has a recognized audio extension. Telegram's hosted
-Bot API currently limits bot downloads to 20 MiB per file; larger uploads are
-rejected with an explanatory message. Audio uploads are kept in a temporary
-directory only for the duration of playback and are removed afterward.
+To play an audio attachment, voice message, or audio document, send it in the
+authorized Telegram chat as a reply to a message from the bot (for example, its
+`/help` instructions). Documents are accepted when their MIME type is `audio/*`
+or their filename has a recognized audio extension. Telegram's hosted Bot API
+currently limits bot downloads to 20 MiB per file; larger uploads are rejected
+with an explanatory message. Audio uploads are kept in a temporary directory
+only for the duration of playback and are removed afterward.
 
 ## Configure and run
 
@@ -57,6 +58,8 @@ To use executable paths that are not on `PATH`, set `YTDLP_PATH` and/or
 `FFMPEG_PATH`. The service joins the configured voice channel at startup. Send
 `/start` or `/help` to the authorized Telegram chat for instructions, then send
 a YouTube URL, `/play <URL>`, or an audio file. `Ctrl+C` stops the service.
+Send `/stop` in the authorized chat to cancel the current download or stop
+playback.
 
 For age-restricted videos, yt-dlp needs cookies from an account that is
 authorized to watch them. Set either `YTDLP_COOKIES_FROM_BROWSER` to a browser

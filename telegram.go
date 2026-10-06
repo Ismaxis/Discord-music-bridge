@@ -16,10 +16,12 @@ import (
 )
 
 type telegramBot struct {
-	config   config
-	discord  *discordPlayer
-	client   *http.Client
-	playLock sync.Mutex
+	config  config
+	discord *discordPlayer
+	client  *http.Client
+	playMu  sync.Mutex
+	playID  uint64
+	cancel  context.CancelFunc
 }
 
 type telegramUpdate struct {
@@ -113,11 +115,14 @@ func (b *telegramBot) handleUpdate(ctx context.Context, update telegramUpdate) {
 	if update.Message == nil || update.Message.Chat.ID != b.config.telegramChatID {
 		return
 	}
-	log.Println("recieved message", update)
 	text := strings.TrimSpace(update.Message.Text)
 	switch text {
 	case "/start", "/help":
-		b.reply(ctx, "Send a YouTube URL or an audio file to play it in the configured Discord voice channel.")
+		b.reply(ctx, "Send a YouTube URL or reply to this message with an audio file to play it in the configured Discord voice channel. Use /stop to stop playback.")
+		return
+	}
+	if isTelegramCommand(text, "stop") {
+		b.stopPlayback(ctx)
 		return
 	}
 	if file, ok := update.Message.audioFile(); ok {
@@ -153,34 +158,96 @@ func (m *telegramMessage) audioFile() (telegramFile, bool) {
 }
 
 func (b *telegramBot) startPlayback(ctx context.Context, status string, download func() (string, func(), error)) {
-	if !b.playLock.TryLock() {
-		b.reply(ctx, "Audio is already downloading or playing. Please wait for it to finish.")
+	playCtx, cancel := context.WithCancel(ctx)
+	b.playMu.Lock()
+	if b.cancel != nil {
+		b.playMu.Unlock()
+		cancel()
+		b.reply(ctx, "Audio is already downloading or playing. Please wait for it to finish or stop using /stop command")
 		return
 	}
+	b.playID++
+	playID := b.playID
+	b.cancel = cancel
+	b.playMu.Unlock()
+
 	if err := b.sendMessage(ctx, status); err != nil {
-		b.playLock.Unlock()
+		cancel()
+		b.finishPlayback(playID)
 		log.Printf("Telegram status message failed: %v", err)
 		return
 	}
-	go b.play(ctx, download)
+	go b.play(playCtx, playID, download)
 }
 
-func (b *telegramBot) play(ctx context.Context, download func() (string, func(), error)) {
-	defer b.playLock.Unlock()
+func (b *telegramBot) play(ctx context.Context, playID uint64, download func() (string, func(), error)) {
+	defer b.finishPlayback(playID)
+	defer b.cancelPlaybackContext(playID)
+
 	path, cleanup, err := download()
 	if err != nil {
+		if ctx.Err() != nil {
+			b.reply(context.Background(), "Playback stopped.")
+			return
+		}
 		b.reportError(ctx, err)
 		return
 	}
 	defer cleanup()
 
 	if err := b.discord.play(ctx, path, b.config.ffmpegPath); err != nil {
+		if ctx.Err() != nil {
+			b.reply(context.Background(), "Playback stopped.")
+			return
+		}
 		b.reportError(ctx, err)
+		return
+	}
+	if ctx.Err() != nil {
+		b.reply(context.Background(), "Playback stopped.")
 		return
 	}
 	if err := b.sendMessage(ctx, "Playback finished."); err != nil {
 		log.Printf("Telegram completion message failed: %v", err)
 	}
+}
+
+func (b *telegramBot) stopPlayback(ctx context.Context) {
+	b.playMu.Lock()
+	cancel := b.cancel
+	b.playMu.Unlock()
+	if cancel == nil {
+		b.reply(ctx, "Nothing is downloading or playing.")
+		return
+	}
+	cancel()
+	b.reply(ctx, "Stopping playback...")
+}
+
+func (b *telegramBot) finishPlayback(playID uint64) {
+	b.playMu.Lock()
+	defer b.playMu.Unlock()
+	if b.playID == playID {
+		b.cancel = nil
+	}
+}
+
+func (b *telegramBot) cancelPlaybackContext(playID uint64) {
+	b.playMu.Lock()
+	defer b.playMu.Unlock()
+	if b.playID == playID && b.cancel != nil {
+		b.cancel()
+	}
+}
+
+func isTelegramCommand(text, command string) bool {
+	fields := strings.Fields(text)
+	if len(fields) != 1 {
+		return false
+	}
+	got := strings.ToLower(fields[0])
+	want := "/" + strings.ToLower(command)
+	return got == want || strings.HasPrefix(got, want+"@")
 }
 
 func (b *telegramBot) reportError(ctx context.Context, err error) {

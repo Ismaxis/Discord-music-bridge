@@ -87,3 +87,26 @@ func TestTelegramFileURLRejectsUnsafePath(t *testing.T) {
 		}
 	}
 }
+
+func TestIsTelegramCommand(t *testing.T) {
+	tests := []struct {
+		text    string
+		command string
+		want    bool
+	}{
+		{"/stop", "stop", true},
+		{"/STOP", "stop", true},
+		{"/stop@music_bot", "stop", true},
+		{"/stop now", "stop", false},
+		{"/stopwatch", "stop", false},
+		{"stop", "stop", false},
+		{"/help", "stop", false},
+	}
+	for _, test := range tests {
+		t.Run(test.text, func(t *testing.T) {
+			if got := isTelegramCommand(test.text, test.command); got != test.want {
+				t.Errorf("isTelegramCommand(%q, %q) = %t, want %t", test.text, test.command, got, test.want)
+			}
+		})
+	}
+}
