@@ -1,5 +1,9 @@
 # Discord music bridge
 
+> [!WARNING]  
+> This project was 100% vide coded.
+> It is intended only for personal use.
+
 A personal Go service that accepts a YouTube URL in one Telegram chat, downloads
 its audio locally, and streams it into one configured Discord voice channel.
 Only one request plays at a time; additional requests are declined rather than
